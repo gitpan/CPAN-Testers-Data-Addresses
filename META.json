@@ -1,6 +1,6 @@
 {
     "name": "CPAN-Testers-Data-Addresses",
-    "version": "0.05",
+    "version": "0.06",
     "abstract": "CPAN Testers Addresses Data Manager",
     "author": ["Barbie <barbie@cpan.org>"],
 
@@ -13,9 +13,9 @@
     },
     "generated_by": "Hand 1.0",
     "keywords" : [
-        "isbn",
-        "books",
-        "scraper"
+        "cpan",
+        "testing",
+        "monitoring"
     ],
 
     "prereqs" : {
@@ -50,7 +50,7 @@
     "provides": {
         "CPAN::Testers::Data::Addresses": {
             "file": "lib/CPAN/Testers/Data/Addresses.pm",
-            "version": "0.05"
+            "version": "0.06"
         }
     },
     "no_index": {
