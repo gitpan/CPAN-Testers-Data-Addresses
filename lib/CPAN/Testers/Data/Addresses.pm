@@ -5,7 +5,7 @@ use strict;
 use warnings;
 
 use vars qw($VERSION);
-$VERSION = '0.07';
+$VERSION = '0.08';
 $|++;
 
 #----------------------------------------------------------------------------
@@ -31,7 +31,7 @@ my %phrasebook = (
     'AllAddressesFull'      => q{SELECT a.*,p.name,p.pause FROM tester_address AS a INNER JOIN tester_profile AS p ON p.testerid=a.testerid},
     'UpdateAddressIndex'    => q{REPLACE INTO ixaddress (id,addressid,fulldate) VALUES (?,?,?)},
 
-    'InsertAddress'         => q{INSERT INTO tester_address (testerid,address,email) VALUES (0,?,?)},
+    'InsertAddress'         => q{INSERT INTO tester_address (testerid,address,email) VALUES (?,?,?)},
     'GetAddressByText'      => q{SELECT addressid FROM tester_address WHERE address = ?},
     'LinkAddress'           => q{UPDATE tester_address SET testerid=? WHERE addressid=?},
 
@@ -74,9 +74,10 @@ sub new {
 
 sub DESTROY {
     my $self = shift;
+    $self->{fh}->close  if($self->{fh});
 }
 
-__PACKAGE__->mk_accessors(qw( lastfile logfile logclean ));
+__PACKAGE__->mk_accessors(qw( lastfile logfile logclean dbh ));
 
 sub process {
     my $self = shift;
@@ -113,7 +114,7 @@ sub update {
 
     my $fh = IO::File->new($self->{options}{update})    or die "Cannot open mailrc file [$self->{options}{update}]: $!";
     while(<$fh>) {
-        next    unless(/^(\d+),(\d+),([^,]+),([^,]+),([^,]*),/);
+        next    unless(/^(\d+),(\d+),([^,]+),([^,]+),([^,]*)/);
         my ($addressid,$testerid,$address,$name,$pause) = ($1,$2,$3,$4,$5);
         unless($address && $name) {
             $self->_log("... bogus line: $_");
@@ -123,34 +124,34 @@ sub update {
         $all++;
         if($testerid == 0) {
             my @rows;
-            @rows = $self->{CPANSTATS}->get_query('hash',$phrasebook{'GetTesterByPause'},$pause)    if($pause);
+            @rows = $self->dbh->get_query('hash',$phrasebook{'GetTesterByPause'},$pause)    if($pause);
             unless(@rows) {
-                @rows = $self->{CPANSTATS}->get_query('hash',$phrasebook{'GetTesterByName'},$name);
+                @rows = $self->dbh->get_query('hash',$phrasebook{'GetTesterByName'},$name);
             }
 
             if(@rows) {
                 $testerid = $rows[0]->{testerid};
             } else {
-                $testerid = $self->{CPANSTATS}->id_query($phrasebook{'InsertTester'},$name,$pause);
+                $testerid = $self->dbh->id_query($phrasebook{'InsertTester'},$name,$pause);
                 $new++;
             }
         }
 
         if($addressid == 0) {
-            my @rows = $self->{CPANSTATS}->get_query('hash',$phrasebook{'GetAddressByText'},$address);
+            my @rows = $self->dbh->get_query('hash',$phrasebook{'GetAddressByText'},$address);
             if(@rows) {
                 $addressid = $rows[0]->{addressid};
             } else {
-                $addressid = $self->{CPANSTATS}->id_query($phrasebook{'InsertAddress'},$address,_extract_email($address));
+                $addressid = $self->dbh->id_query($phrasebook{'InsertAddress'},$testerid,$address,_extract_email($address));
             }
         }
 
-        $self->{CPANSTATS}->do_query($phrasebook{'LinkAddress'},$testerid,$addressid);
+        $self->dbh->do_query($phrasebook{'LinkAddress'},$testerid,$addressid);
         $self->_log("... profile => address: ($testerid,$name,$pause) => ($addressid,$address)");
     }
 
-    print "$all addresses mapped\n";
-    print "$new new addresses\n";
+    $self->_printout("$all addresses mapped");
+    $self->_printout("$new new addresses");
 
     $self->_log("$all addresses mapped, $new new addresses");
     $self->_log("stopping update");
@@ -163,23 +164,23 @@ sub reindex {
 
     # load known addresses
     my %address;
-    my $next = $self->{CPANSTATS}->iterator('hash',$phrasebook{'AllAddresses'});
+    my $next = $self->dbh->iterator('hash',$phrasebook{'AllAddresses'});
     while( my $row = $next->() ) {
         $address{$row->{address}} = $row->{addressid};
     }
 
     # search through reports updating the index
     my $lastid = defined $self->{options}{lastid} ? $self->{options}{lastid} : $self->_lastid();
-    $next = $self->{CPANSTATS}->iterator('hash',$phrasebook{'AllReports'},$lastid);
+    $next = $self->dbh->iterator('hash',$phrasebook{'AllReports'},$lastid);
     while( my $row = $next->() ) {
         #print STDERR "row: $row->{id} $row->{tester}\n";
         if($address{$row->{tester}}) {
             $self->_log("FOUND - row: $row->{id} $row->{tester}");
-            $self->{CPANSTATS}->do_query($phrasebook{'UpdateAddressIndex'},$row->{id},$address{$row->{tester}},$row->{fulldate});
+            $self->dbh->do_query($phrasebook{'UpdateAddressIndex'},$row->{id},$address{$row->{tester}},$row->{fulldate});
         } else {
             $self->_log("NEW   - row: $row->{id} $row->{tester}");
-            $address{$row->{tester}} = $self->{CPANSTATS}->id_query($phrasebook{'InsertAddress'},$row->{tester},_extract_email($row->{tester}));
-            $self->{CPANSTATS}->do_query($phrasebook{'UpdateAddressIndex'},$row->{id},$address{$row->{tester}},$row->{fulldate});
+            $address{$row->{tester}} = $self->dbh->id_query($phrasebook{'InsertAddress'},0,$row->{tester},_extract_email($row->{tester}));
+            $self->dbh->do_query($phrasebook{'UpdateAddressIndex'},$row->{id},$address{$row->{tester}},$row->{fulldate});
         }
 
         $lastid = $row->{id};
@@ -201,7 +202,7 @@ sub backup {
 
     $self->_log("Backup via DBD drivers");
 
-    my $rows = $self->{CPANSTATS}->iterator('array',$phrasebook{'SelectBackup'});
+    my $rows = $self->dbh->iterator('array',$phrasebook{'SelectBackup'});
     while(my $row = $rows->()) {
         for my $driver (keys %{$self->{backups}}) {
             $self->{backups}{$driver}{db}->do_query($phrasebook{'InsertBackup'},@$row);
@@ -223,7 +224,8 @@ sub backup {
 
 sub load_addresses {
     my $self = shift;
-    my $next = $self->{CPANSTATS}->iterator('hash',$phrasebook{'AllAddressesFull'});
+    
+    my $next = $self->dbh->iterator('hash',$phrasebook{'AllAddressesFull'});
     while( my $row = $next->() ) {
         $self->{paused_map}{$row->{pause}}   = { name => $row->{name}, pause => $row->{pause}, addressid => $row->{addressid}, testerid => $row->{testerid}, match => '# MAPPED PAUSE' }  if($row->{pause});
         $self->{parsed_map}{$row->{address}} = { name => $row->{name}, pause => $row->{pause}, addressid => $row->{addressid}, testerid => $row->{testerid}, match => '# MAPPED ADDRESS' };
@@ -241,7 +243,8 @@ sub load_addresses {
         $self->_log( "address entries = " . scalar(keys %{ $self->{address_map} }) . "\n" );
         $self->_log( "domain entries  = " . scalar(keys %{ $self->{domain_map}  }) . "\n" );
     }
-    $next = $self->{CPANSTATS}->iterator('hash',$phrasebook{'AllAddresses'});
+
+    $next = $self->dbh->iterator('hash',$phrasebook{'AllAddresses'});
     while( my $row = $next->() ) {
         next    if($self->{parsed_map}{$row->{address}});
         $self->{stored_map}{$row->{address}} = { name => '', pause => '', addressid => $row->{addressid}, testerid => 0, match => '# STORED ADDRESS' };
@@ -275,7 +278,7 @@ sub load_addresses {
     if($self->{options}{verbose}) {
         $self->_log( "sql = $sql\n" );
     }
-    $next = $self->{CPANSTATS}->iterator('array',$sql);
+    $next = $self->dbh->iterator('array',$sql);
     $self->{parsed} = 0;
     while(my $row = $next->()) {
         $self->{parsed}++;
@@ -341,23 +344,27 @@ sub match_addresses {
 
 sub print_addresses {
     my $self = shift;
+    my $text = '';
+
     if($self->{result}{NOMAIL}) {
-        print "ERRORS:\n";
+        $self->_printout( "ERRORS:" );
         for my $email (sort @{$self->{result}{NOMAIL}}) {
-            print "NOMAIL: $email\n";
+            $self->_printout( "NOMAIL: $email" );
         }
     }
 
-    print "\nMATCH:\n";
+    $self->_printout( "\nMATCH:" );
     for my $key (sort {$self->{unparsed_map}{$a} cmp $self->{unparsed_map}{$b}} keys %{ $self->{unparsed_map} }) {
         if($self->{unparsed_map}{$key}->{match}) {
-            printf "%d,%d,%s,%s,%s,%s\n", 
-                ($self->{unparsed_map}{$key}->{addressid} || 0),
-                ($self->{unparsed_map}{$key}->{testerid}  || 0),
-                $key,
-                ($self->{unparsed_map}{$key}->{name}  || ''),
-                ($self->{unparsed_map}{$key}->{pause} || ''),
-                ($self->{unparsed_map}{$key}->{match} || '');
+            $self->_printout(
+                sprintf "%d,%d,%s,%s,%s,%s", 
+                    ($self->{unparsed_map}{$key}->{addressid} || 0),
+                    ($self->{unparsed_map}{$key}->{testerid}  || 0),
+                    $key,
+                    ($self->{unparsed_map}{$key}->{name}  || ''),
+                    ($self->{unparsed_map}{$key}->{pause} || ''),
+                    ($self->{unparsed_map}{$key}->{match} || '')
+            );
             delete $self->{unparsed_map}{$key};
         } else {
             my ($local,$domain) = $self->{unparsed_map}{$key}->{email} =~ /([-+=\w.]+)\@([^\s]+)/;
@@ -372,23 +379,25 @@ sub print_addresses {
         }
     }
 
-    print "\n";
+    $self->_printout( '' );
     return  if($self->{options}{match});
 
     #use Data::Dumper;
     #print STDERR Dumper(\%{ $self->{unparsed_map} });
 
     my @mails;
-    print "PATTERNS:\n";
+    $self->_printout( "PATTERNS:" );
     for my $key (sort { $self->{unparsed_map}{$a}{'sort'} cmp $self->{unparsed_map}{$b}{'sort'} } keys %{ $self->{unparsed_map} }) {
         next    unless($key);
-        printf "%d,%d,%s,%s,%s,%s\n", 
+        $self->_printout( 
+            sprintf "%d,%d,%s,%s,%s,%s", 
                 ($self->{unparsed_map}{$key}->{addressid} || 0),
                 ($self->{unparsed_map}{$key}->{testerid}  || 0),
                 $key,
                 ($self->{unparsed_map}{$key}->{name}  || ''),
                 ($self->{unparsed_map}{$key}->{pause} || ''),
-                ($self->{unparsed_map}{$key}->{match} || '') . "\t" . $self->{unparsed_map}{$key}->{'sort'};
+                ($self->{unparsed_map}{$key}->{match} || '') . "\t" . $self->{unparsed_map}{$key}->{'sort'}
+        );
     }
 }
 
@@ -481,7 +490,7 @@ sub _init_options {
     my $self = shift;
     my %hash = @_;
     $self->{options} = {};
-    my @options = qw(mailrc update reindex lastid backup month match verbose lastfile logfile logclean);
+    my @options = qw(mailrc update reindex lastid backup month match verbose lastfile logfile logclean output);
 
     GetOptions( $self->{options},
 
@@ -504,6 +513,7 @@ sub _init_options {
         'match',
 
         # other options
+        'output=s',
         'lastfile=s',
         'verbose|v',
         'help|h'
@@ -525,8 +535,8 @@ sub _init_options {
     my $db = 'CPANSTATS';
     die "No configuration for $db database\n"   unless($cfg->SectionExists($db));
     $opts{$_} = $cfg->val($db,$_)   for(qw(driver database dbfile dbhost dbport dbuser dbpass));
-    $self->{$db} = CPAN::Testers::Common::DBUtils->new(%opts);
-    die "Cannot configure $db database\n" unless($self->{$db});
+    $self->dbh( CPAN::Testers::Common::DBUtils->new(%opts) );
+    die "Cannot configure $db database\n" unless($self->dbh);
 
     # use configuration settings or defaults if none provided
     for my $opt (@options) {
@@ -583,6 +593,13 @@ sub _init_options {
     $self->logfile($self->{options}{logfile});
     $self->logclean($self->{options}{logclean});
 
+    # set output 
+    if($self->{options}{output}) {
+        if(my $fh = IO::File->new($self->{options}{output}, 'w+')) {
+            $self->{fh} = $fh;
+        }
+    }
+
     return  unless($self->{options}{verbose});
     print STDERR "config: $_ = ".($self->{options}{$_}||'')."\n"  for(@options);
 }
@@ -600,6 +617,7 @@ sub _help {
         print "         | [--reindex] [--lastid=<num>] \\\n";
         print "         | [--backup] \\\n";
         print "         | [--mailrc|m=<file>] [--month=<string>] [--match] ) \\\n";
+        print "         [--output=<file>] \n\n";
         print "         [--logfile=<file>] [--logclean=(0|1)] \n\n";
 
 #              12345678901234567890123456789012345678901234567890123456789012345678901234567890
@@ -608,6 +626,7 @@ sub _help {
         print "\nFunctional Options:\n";
         print "   --config=<file>           # path/file to configuration file\n";
         print "  [--mailrc=<file>]          # path/file to mailrc file\n";
+        print "  [--output=<file>]          # path/file to output file (defaults to STDOUT)\n";
 
         print "\nUpdate Options:\n";
         print "  [--update]                 # run in update mode\n";
@@ -632,6 +651,15 @@ sub _help {
 
     print "$0 v$VERSION\n";
     exit(0);
+}
+
+sub _printout {
+    my $self = shift;
+    if(my $fh = $self->{fh}) {
+        print $fh "@_\n";
+    } else {
+        print STDOUT "@_\n";
+    }
 }
 
 sub _log {
@@ -850,7 +878,7 @@ bug or are experiencing difficulties, that is not explained within the POD
 documentation, please send an email to barbie@cpan.org. However, it would help
 greatly if you are able to pinpoint problems or even supply a patch.
 
-Fixes are dependant upon their severity and my availablity. Should a fix not
+Fixes are dependent upon their severity and my availability. Should a fix not
 be forthcoming, please feel free to (politely) remind me.
 
 RT Queue -

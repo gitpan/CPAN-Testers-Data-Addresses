@@ -1,33 +1,45 @@
 Revision history for Perl distribution CPAN-Testers-Data-Addresses
 ==================================================================
 
-0.07	08/04/2012
-	- fixed POD error in supplementary script.
-	- updated SQL to include fulldate.
+0.08    2012-11-04
+        - spelling fixes. (thanks to Florian Schlichting & Gregor Herrmann).
+        - CHANGES to Changes.
+        - change file dates changed to meet W3CDTF standards.
+        - Artistic License v2 now sole license.
+        - added explicit LICENSE file.
+        - added minimum perl version (5.006).
+        - reworked Makefile.PL for clarity.
+        - test suite updates.
+        - added support for writing to named output file.
+        - updated tests to use Test::Database.
 
-0.06	13/08/2010
+0.07    2012-04-08
+        - fixed POD error in supplementary script.
+        - updated SQL to include fulldate.
+
+0.06    2010-08-13
         - file removal test doesn't work on Windows :(
 
-0.05	11/08/2010
+0.05    2010-08-11
         - added META.json to the package files.
         - removed references to NNTPID.
         - added more domain filters to example settings.ini.
 
-0.04	26/11/2009
+0.04    2009-11-26
         - added text for README
         - updated documentation for wrapper script
         - added and amended various links
 
-0.03	24/11/2009
+0.03    2009-11-24
         - added example settings file
         - added backup code
 
-0.02	24/11/2009
+0.02    2009-11-24
         - added counters to update
         - removed debugging statements
         - added further address matching comparisons
         - added missing prerequisite
         - abstracted filters out into config file.
 
-0.01	22/11/2009
+0.01    2009-11-22
         - initial release
