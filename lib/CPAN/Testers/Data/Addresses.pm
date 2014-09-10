@@ -5,7 +5,7 @@ use strict;
 use warnings;
 
 use vars qw($VERSION);
-$VERSION = '0.12';
+$VERSION = '0.13';
 $|++;
 
 #----------------------------------------------------------------------------
@@ -15,6 +15,7 @@ use base qw(Class::Accessor::Fast);
 
 use CPAN::Testers::Common::DBUtils;
 use Config::IniFiles;
+use DBI;
 use File::Basename;
 use File::Path;
 use File::Slurp;
@@ -610,8 +611,9 @@ sub _init_options {
     my %hash = @_;
     $self->{options} = {};
     my @options = qw(mailrc update clean reindex lastid backup month match verbose lastfile logfile logclean output);
+    my %options;
 
-    GetOptions( $self->{options},
+    GetOptions( \%options,
 
         # mandatory options
         'config|c=s',
@@ -643,7 +645,10 @@ sub _init_options {
         'help|h'
     ) or $self->_help();
 
-    $self->{options}{$_} ||= $hash{$_}  for(qw(config help),@options);
+    for my $opt (qw(config help),@options) {
+        $self->{options}{$opt} ||= $hash{$opt}      if($hash{$opt});
+        $self->{options}{$opt} ||= $options{$opt}   if($options{$opt});
+    }
 
     $self->_help(1) if($self->{options}{help});
     $self->_help(0) if($self->{options}{version});
@@ -684,13 +689,30 @@ sub _init_options {
         $self->_help(1,"Given $opt file [$self->{options}{$opt}] not a valid file, see help below.")    unless(-f $self->{options}{$opt});
     }
 
+    # clean up potential rogue characters
+    $self->{options}{lastid} =~ s/\D+//g    if($self->{options}{lastid});
+
+    # prime accessors
+    $self->lastfile($self->{options}{lastfile});
+    $self->logfile($self->{options}{logfile});
+    $self->logclean($self->{options}{logclean});
+
     # configure backup DBs
     if($self->{options}{backup}) {
         $self->help(1,"No configuration for BACKUPS with backup option")    unless($cfg->SectionExists('BACKUPS'));
 
+        # available DBI drivers
+        my %DRIVERS_DBI = map { $_ => 1 } DBI->available_drivers();
+
         my @drivers = $cfg->val('BACKUPS','drivers');
         for my $driver (@drivers) {
             $self->help(1,"No configuration for backup option '$driver'")   unless($cfg->SectionExists($driver));
+
+            # ignore drivers that are unavailable
+            unless($DRIVERS_DBI{$driver}) {
+                $self->_log("Backup DBD driver '$driver' is not available");
+                next;
+            }
 
             %opts = ();
             $opts{$_} = $cfg->val($driver,$_)   for(qw(driver database dbfile dbhost dbport dbuser dbpass));
@@ -708,14 +730,6 @@ sub _init_options {
             $self->help(1,"Cannot configure BACKUPS database for '$driver'")   unless($self->{backups}{$driver}{db});
         }
     }
-
-    # clean up potential rogue characters
-    $self->{options}{lastid} =~ s/\D+//g    if($self->{options}{lastid});
-
-    # prime accessors
-    $self->lastfile($self->{options}{lastfile});
-    $self->logfile($self->{options}{logfile});
-    $self->logclean($self->{options}{logclean});
 
     # set output 
     if($self->{options}{output}) {
@@ -1045,7 +1059,7 @@ F<http://blog.cpantesters.org/>
 
 =head1 COPYRIGHT AND LICENSE
 
-  Copyright (C) 2009-2013 Barbie for Miss Barbell Productions.
+  Copyright (C) 2009-2014 Barbie for Miss Barbell Productions.
 
   This module is free software; you can redistribute it and/or
   modify it under the Artistic License 2.0.
