@@ -1,6 +1,6 @@
 {
     "name": "CPAN-Testers-Data-Addresses",
-    "version": "0.15",
+    "version": "0.16",
     "abstract": "CPAN Testers Addresses Data Manager",
     "author": ["Barbie <barbie@cpan.org>"],
 
@@ -44,7 +44,8 @@
                 "Test::CPAN::Meta::JSON": "0",
                 "Test::Database": "0",
                 "Test::Pod": "1.00",
-                "Test::Pod::Coverage": "0.08"
+                "Test::Pod::Coverage": "0.08",
+                "Test::Trap": "0"
             }
         }
     },
@@ -52,7 +53,7 @@
     "provides": {
         "CPAN::Testers::Data::Addresses": {
             "file": "lib/CPAN/Testers/Data/Addresses.pm",
-            "version": "0.15"
+            "version": "0.16"
         }
     },
     "no_index": {
